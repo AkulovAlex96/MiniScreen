@@ -2,7 +2,7 @@
 #include <LovyanGFX.hpp>
 #include <AnimatedGIF.h>
 
-#include "racoon_gif.h"   // сгенерировано tools/convert_gif.py
+#include "gif_registry.h"   // сгенерировано tools/convert_gif.py
 
 // ═══ Проигрывание GIF на GC9A01 240x240 ═══════════════════════════════════════
 // GIF встроен в flash как массив, декодируется на лету (AnimatedGIF от bitbank2).
@@ -71,9 +71,38 @@ static AnimatedGIF gif;
 
 static bool paused = false;
 static bool blOn   = true;
+static size_t gifIndex = 0;
 
 // Смещение кадра на экране (GIF ровно 240x240 → 0,0)
 static int offX = 0, offY = 0;
+
+static void gifDraw(GIFDRAW *pDraw);
+
+static bool openCurrentGif() {
+    if (kGifAssetsCount == 0) {
+        return false;
+    }
+
+    const GifAsset &asset = kGifAssets[gifIndex];
+    if (!gif.open((uint8_t*)asset.data, asset.len, gifDraw)) {
+        Serial.printf("GIF open error for '%s': %d\n", asset.name, gif.getLastError());
+        return false;
+    }
+
+    Serial.printf(
+        "GIF[%u/%u]: %s (%lu bytes), canvas=%dx%d\n",
+        (unsigned)(gifIndex + 1),
+        (unsigned)kGifAssetsCount,
+        asset.name,
+        (unsigned long)asset.len,
+        gif.getCanvasWidth(),
+        gif.getCanvasHeight()
+    );
+    offX = (240 - gif.getCanvasWidth())  / 2;
+    offY = (240 - gif.getCanvasHeight()) / 2;
+    spr.fillSprite((uint16_t)0x0000);
+    return true;
+}
 
 // ─── Колбэк отрисовки строки GIF ─────────────────────────────────────────────
 // Палитра запрошена в RGB565 little-endian → строки пишем в спрайт как есть.
@@ -117,7 +146,7 @@ static bool btnPressed(int pin) {
 
 void setup() {
     Serial.begin(115200);
-    Serial.printf("GIF player: %lu bytes in flash\n", (unsigned long)racoon_gif_len);
+    Serial.printf("GIF player: %u assets\n", (unsigned)kGifAssetsCount);
 
     pinMode(BTN1_PIN, INPUT_PULLUP);
     pinMode(BTN2_PIN, INPUT_PULLUP);
@@ -141,12 +170,16 @@ void setup() {
     }
     spr.fillSprite((uint16_t)0x0000);
 
+    if (kGifAssetsCount == 0) {
+        tft.setTextDatum(lgfx::middle_center);
+        tft.setTextColor((uint16_t)0xF800);
+        tft.setTextSize(2);
+        tft.drawString("NO GIF ASSETS", 120, 120);
+        while (true) delay(1000);
+    }
+
     gif.begin(GIF_PALETTE_RGB565_LE);
-    if (gif.open((uint8_t*)racoon_gif, racoon_gif_len, gifDraw)) {
-        Serial.printf("GIF: %dx%d\n", gif.getCanvasWidth(), gif.getCanvasHeight());
-        offX = (240 - gif.getCanvasWidth())  / 2;
-        offY = (240 - gif.getCanvasHeight()) / 2;
-    } else {
+    if (!openCurrentGif()) {
         Serial.printf("GIF open error: %d\n", gif.getLastError());
         tft.setTextDatum(lgfx::middle_center);
         tft.setTextColor((uint16_t)0xF800);
@@ -167,7 +200,9 @@ void loop() {
 
     int delayMs = 0;
     if (!gif.playFrame(false, &delayMs)) {
-        gif.reset();               // конец GIF → зациклить
+        gif.close();
+        gifIndex = (gifIndex + 1) % kGifAssetsCount;   // конец GIF -> следующий
+        openCurrentGif();
         return;
     }
     spr.pushSprite(0, 0);

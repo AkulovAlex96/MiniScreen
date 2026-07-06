@@ -10,8 +10,12 @@
 |---|---|
 | [firmware_demo](firmware_demo/) | Базовый тест дисплея: цвета, радуга, текст. Подключение: [WIRING.md](firmware_demo/WIRING.md) |
 | [firmware_widgets](firmware_widgets/) | 8 виджетов: аналоговые/цифровые часы, календарь, лоадеры, gauge, матрица, звёзды |
-| [firmware_gif](firmware_gif/) | Проигрывание GIF из flash (конвертер в комплекте) |
+| [firmware_gif](firmware_gif/) | Проигрывание GIF из flash (конвертер в комплекте). Оптимизация/поиск гифок: [GIF_TOOLS.md](firmware_gif/GIF_TOOLS.md) |
 | [firmware_mjpeg](firmware_mjpeg/) | Видео из сети: MJPEG по HTTP с ffmpeg-сервера (в т.ч. YouTube) |
+| [firmware_radar](firmware_radar/) | Радар самолётов вокруг дома (OpenSky Network, без ключа) |
+| [firmware_clouds](firmware_clouds/) | Стилизованные тучи по реальным данным погоды (Open-Meteo, без ключа) |
+| [firmware_cloudradar](firmware_cloudradar/) | Настоящий радар/спутник облаков (RainViewer, без ключа) |
+| [firmware_map](firmware_map/) | Карта города + погода текстом (Mapbox — нужен ключ) |
 | [gif](gif/) | Исходные гифки |
 | [Img](Img/), [Test_board](Test_board/) | Схемы блоков будущей платы (EasyEDA) |
 
@@ -30,5 +34,13 @@
   `fillScreen(0xF800)` без явного uint16_t — это тёмно-зелёный RGB888, не красный!
 - **GC9A01:** нужен `invert=true`, `rgb_order=false`
 - **Прошивка по USB-JTAG:** `upload_speed = 460800`, при зависании — BOOT+RST
-- **firmware_gif:** заголовок с гифкой генерируется: `cd tools && python convert_gif.py ../../gif/racoon.gif`
+- **firmware_gif:** быстрое добавление GIF:
+  1) положить новые `.gif` в папку `gif/`
+  2) выполнить `cd firmware_gif && python tools/convert_gif.py --all`
+  3) прошить `pio run --target upload` — проигрыватель автоматически подхватит все сгенерированные GIF из `src/gif_registry.h`
 - **firmware_mjpeg:** скопировать `src/secrets.h.example` → `src/secrets.h`, вписать Wi-Fi
+- **firmware_radar/clouds/cloudradar/map:** тот же паттерн `secrets.h.example` →
+  `secrets.h`, но с 2 Wi-Fi сетями (приоритетная + резервная) и домашними
+  координатами. Ключ нужен только **firmware_map** (Mapbox access token,
+  free tier). **firmware_cloudradar** обязан показывать на экране атрибуцию
+  "Weather data by RainViewer" — так требуют условия использования их API

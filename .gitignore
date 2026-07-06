@@ -10,3 +10,7 @@ firmware_gif/src/*_gif.h
 firmware_gif/tools/*_240.gif
 
 __pycache__/
+
+
+.venv/
+.claude/
