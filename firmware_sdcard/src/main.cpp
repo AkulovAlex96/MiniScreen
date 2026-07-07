@@ -10,7 +10,11 @@
 // физический SPI-хост.
 //
 // CATALEX MicroSD Card Adapter:
-//   GND->GND  VCC->3V3  MISO->GPIO46  MOSI->GPIO40  SCK->GPIO39  CS->GPIO38
+//   GND->GND  VCC->5V(!)  MISO->GPIO41  MOSI->GPIO40  SCK->GPIO39  CS->GPIO38
+// VCC именно 5V — на плате свой AMS1117-3.3 с просадкой ~1В, от 3.3V на
+// выходе будет ~2.0-2.3V, SD-карте не хватает для стабильной инициализации.
+// Буфер линий CS/SCK/MOSI/MISO сидит на регулированных 3.3V, так что для
+// ESP32 они безопасны независимо от того, что подано на VCC.
 //
 // BTN1 (GPIO1) — пересканировать карту прямо сейчас
 // BTN2 (GPIO2) — подсветка вкл/выкл
@@ -18,7 +22,7 @@
 #define SD_CS   38
 #define SD_SCK  39
 #define SD_MOSI 40
-#define SD_MISO 46
+#define SD_MISO 41
 
 #define TOUCH_PIN 15   // сенсорная кнопка (TTP223 OUT), не путать с CST816S RST на будущей плате
 
@@ -197,6 +201,24 @@ static void drawCardInfo() {
     spr.pushSprite(0, 0);
 }
 
+// ─── Монтирование карты ───────────────────────────────────────────────────────
+// Сначала пробуем штатную скорость, при неудаче — медленную (400 кГц, как в
+// самом начале SD-протокола) на случай шумных проводов на макетке/длинных
+// джамперов — частая причина "не видит карту" при рабочей карте и верной схеме.
+
+static bool trySdBegin() {
+    if (SD.begin(SD_CS, sdSPI, 4000000)) return true;
+    Serial.println("SD.begin @4MHz failed, retry @400kHz...");
+    SD.end();
+    delay(50);
+    if (SD.begin(SD_CS, sdSPI, 400000)) {
+        Serial.println("SD.begin @400kHz OK");
+        return true;
+    }
+    Serial.println("SD.begin failed at both speeds");
+    return false;
+}
+
 // ─── Кнопки ──────────────────────────────────────────────────────────────────
 
 static bool btnPressed(int pin) {
@@ -264,7 +286,7 @@ void loop() {
             forceRescan = false;
             lastAttemptMs = millis();
             SD.end();
-            if (SD.begin(SD_CS, sdSPI)) {
+            if (trySdBegin()) {
                 cardMounted = true;
                 drawStatus("Scanning", "reading files...", C_CYAN);
                 rescan();
