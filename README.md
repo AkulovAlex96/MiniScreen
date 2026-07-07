@@ -17,6 +17,7 @@
 | [firmware_cloudradar](firmware_cloudradar/) | Настоящий радар/спутник облаков (RainViewer, без ключа) |
 | [firmware_map](firmware_map/) | Карта города + погода текстом (Mapbox — нужен ключ) |
 | [firmware_sdcard](firmware_sdcard/) | Инфо о MicroSD: объём, кол-во файлов, круговой прогресс-бар |
+| [firmware_gif_sd](firmware_gif_sd/) | Проигрывание GIF прямо с MicroSD (без встраивания во flash) |
 | [gif](gif/) | Исходные гифки |
 | [Img](Img/), [Test_board](Test_board/) | Схемы блоков будущей платы (EasyEDA) |
 
@@ -45,7 +46,7 @@
   координатами. Ключ нужен только **firmware_map** (Mapbox access token,
   free tier). **firmware_cloudradar** обязан показывать на экране атрибуцию
   "Weather data by RainViewer" — так требуют условия использования их API
-- **firmware_sdcard:** MicroSD на отдельной SPI-шине (HSPI/SPI3), не общей с
-  дисплеем (LovyanGFX держит SPI2 монопольно) — CS=GPIO38, SCK=GPIO39,
-  MOSI=GPIO40, MISO=GPIO46. Опциональная сенсорная кнопка (TTP223) на GPIO15
-  дублирует BTN1 (рефреш)
+- **firmware_sdcard/firmware_gif_sd:** MicroSD на отдельной SPI-шине
+  (HSPI/SPI3), не общей с дисплеем (LovyanGFX держит SPI2 монопольно) —
+  CS=GPIO38, SCK=GPIO39, MOSI=GPIO40, MISO=GPIO46. Опциональная сенсорная
+  кнопка (TTP223) на GPIO15 — рефреш/следующий GIF смотря по прошивке
