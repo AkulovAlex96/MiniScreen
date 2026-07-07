@@ -16,8 +16,8 @@
 
 // ─── Настройки радара (не секрет, крутится в коде) ───────────────────────────
 
-static const double   RANGE_KM         = 500.0;     // радиус отображения
-static const uint32_t POLL_INTERVAL_MS = 20;    // 60000; OpenSky: анонимно 400 "кредитов"/день
+static const double   RANGE_KM         = 100.0;     // радиус отображения
+static const uint32_t POLL_INTERVAL_MS = 60000;    // OpenSky: анонимно 400 "кредитов"/день, не увеличивать сильно
 static const int      MAX_PLANES       = 60;
 
 // ─── LGFX: конфиг панели (тот же, что в других прошивках) ────────────────────
