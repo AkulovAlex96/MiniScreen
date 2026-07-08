@@ -215,25 +215,31 @@ static bool connectWiFi() {
 }
 
 // ─── Карта-подложка (Mapbox static, dark) ────────────────────────────────────
-// PNG хранится сжатым (mapBuf) и декодируется в спрайт при каждой перерисовке —
-// второй полнокадровый буфер не нужен, а перерисовка у нас раз в минуту.
+// PNG хранится сжатым (mapBuf) и декодируется ОДИН РАЗ за фетч в отдельный
+// PSRAM-спрайт mapSprite (см. cacheMapBackground); drawRadar() теперь дергается
+// каждый кадр ради анимации самолётов, а декод PNG каждый кадр был бы слишком
+// дорогим — вместо этого просто копируем уже готовый mapSprite в spr.
 
 static const size_t MAP_BUF_SIZE = 48 * 1024;
 static uint8_t mapBuf[MAP_BUF_SIZE];
 static size_t  mapLen = 0;
 static bool    mapLoaded = false;
+static bool    mapSpriteOk = false;   // false = createSprite() провалился (нет PSRAM и т.п.)
+static char    mapErr[24] = "";       // причина последней неудачи — на экран, раз серийный монитор ненадёжен
 
 static const int RADAR_R = 108;   // радиус радара в пикселях
+
+static LGFX_Sprite mapSprite(&tft);   // закэшированный декодированный фон карты
 
 static int pngDraw(PNGDRAW *pDraw) {
     static uint16_t line[240];
     png.getLineAsRGB565(pDraw, line, PNG_RGB565_LITTLE_ENDIAN, 0xffffffff);
-    spr.pushImage(0, pDraw->y, pDraw->iWidth, 1, line);
+    mapSprite.pushImage(0, pDraw->y, pDraw->iWidth, 1, line);
     return 1;
 }
 
 static bool fetchMap() {
-    if (!MAPBOX_TOKEN[0]) return false;   // токена нет — работаем без карты
+    if (!MAPBOX_TOKEN[0]) { strcpy(mapErr, "no token"); return false; }   // токена нет — работаем без карты
 
     // Дробный зум подбираем так, чтобы cfg.rangeKm пришлось ровно на RADAR_R px:
     // метров/пиксель у веб-меркатора = 156543.03392 * cos(lat) / 2^zoom
@@ -249,6 +255,10 @@ static bool fetchMap() {
         style, cfg.lon, cfg.lat, zoom, MAPBOX_TOKEN);
 
     statusScreen("Loading map", style, C_CYAN);
+    // На случай, если предыдущая попытка прервалась посреди чтения тела —
+    // secureClient мог остаться в наполовину открытом состоянии, из-за чего
+    // следующая попытка тоже давала бы 0 байт. Форсируем чистое соединение.
+    secureClient.stop();
     // Без проверки сертификата: цепочка Mapbox не бьётся с Amazon Root CA
     // (X509 verify failed), а таскать актуальные корни на девайсе хлопотно.
     // Для публичных карт это приемлемый компромисс.
@@ -259,57 +269,101 @@ static bool fetchMap() {
     int code = http.GET();
     if (code != HTTP_CODE_OK) {
         Serial.printf("Mapbox HTTP %d\n", code);
+        snprintf(mapErr, sizeof(mapErr), "http %d", code);
         http.end();
         return false;
     }
 
     WiFiClient *stream = http.getStreamPtr();
     int remaining = http.getSize();
+    Serial.printf("Mapbox: HTTP 200, Content-Length=%d\n", remaining);
     mapLen = 0;
     uint32_t lastByteMs = millis();
+    const char* exitReason = "maxbuf";
     while (http.connected() && mapLen < MAP_BUF_SIZE) {
         size_t avail = stream->available();
         if (avail > 0) {
             size_t want = min(avail, MAP_BUF_SIZE - mapLen);
             int n = stream->readBytes(mapBuf + mapLen, want);
             mapLen += n;
-            if (remaining > 0) { remaining -= n; if (remaining <= 0) break; }
+            if (remaining > 0) { remaining -= n; if (remaining <= 0) { exitReason = "done"; break; } }
             lastByteMs = millis();
         } else if (remaining == 0) {
+            exitReason = "remaining0";
             break;
         } else if (millis() - lastByteMs > 5000) {
-            Serial.println("fetchMap: timeout");
+            exitReason = "stall5s";
             break;
+        } else if (!http.connected()) {
+            exitReason = "disconnected";
         }
     }
+    if (!http.connected() && mapLen == 0) exitReason = "disconnected";
     http.end();
-    Serial.printf("Map: %u bytes, zoom %.2f\n", (unsigned)mapLen, zoom);
-    return mapLen > 0;
+    Serial.printf("Map: %u bytes, zoom %.2f, exit=%s\n", (unsigned)mapLen, zoom, exitReason);
+    if (mapLen == 0) {
+        snprintf(mapErr, sizeof(mapErr), "0B/%s", exitReason);
+        return false;
+    }
+    mapErr[0] = '\0';
+    return true;
 }
 
-// Распаковать PNG карты в спрайт (фон кадра)
-static bool drawMapBackground() {
-    if (!mapLoaded) return false;
-    if (png.openRAM(mapBuf, mapLen, pngDraw) != PNG_SUCCESS) return false;
+// Распаковать PNG карты в mapSprite — вызывается один раз на каждый fetchMap(),
+// не на каждый кадр (см. комментарий выше). Вызывающий код сам гарантирует
+// (через fetchMap() && cacheMapBackground()), что mapBuf/mapLen валидны —
+// проверять здесь глобальную mapLoaded нельзя: на первом же вызове она ещё не
+// успевает обновиться (присваивание mapLoaded = ... произойдёт только после
+// того, как обе функции отработают), так что проверка всегда бы била мимо.
+static bool cacheMapBackground() {
+    if (!mapSpriteOk) { strcpy(mapErr, "no sprite"); return false; }
+    if (png.openRAM(mapBuf, mapLen, pngDraw) != PNG_SUCCESS) { strcpy(mapErr, "png open"); return false; }
     int rc = png.decode(nullptr, 0);
     png.close();
-    return rc == PNG_SUCCESS;
+    if (rc != PNG_SUCCESS) { strcpy(mapErr, "png decode"); return false; }
+    mapErr[0] = '\0';
+    return true;
 }
 
 // ─── Данные радара ────────────────────────────────────────────────────────────
 
+// icao24 — стабильный идентификатор борта (24-битный ICAO-адрес), нужен чтобы
+// сматчить один и тот же борт между двумя последовательными опросами и
+// интерполировать его позицию (callsign не годится — бывает пустым/повторяется).
 struct Plane {
+    char  icao24[7];
     char  callsign[9];
-    float lat, lon, altM, speedMs, track;
-    float distM;    // расстояние от дома, м
-    float brgDeg;   // азимут от дома, 0=север, по часовой
+    float lat, lon;            // T1 — последняя реально полученная позиция
+    float prevLat, prevLon;    // T0 — откуда анимируем: либо позиция из
+                                // предыдущего опроса, либо (для нового борта)
+                                // экстраполяция назад по курсу/скорости
+    float prevTrack;           // курс на T0 — интерполируем и его, иначе иконка
+                                // мгновенно доворачивается в момент прихода T1,
+                                // а летит при этом ещё по старой прямой
+    uint32_t animStartMs;      // millis() начала текущей анимации T0→T1
+    uint32_t animDurMs;        // сколько она должна идти
+    float altM, speedMs, track;
     int8_t category; // ADS-B emitter category (0=неизвестно, 8=вертолёт...)
 };
 
 static Plane planes[MAX_PLANES];
 static int   planeCount = 0;
+
 static uint32_t lastFetchMs = 0;
 static bool  forceRefresh = true;
+static char  planeErr[24] = "";   // причина последней неудачи fetchPlanes() — на экран
+
+// Новый борт (не было в трекинге) не тащим через весь интервал опроса —
+// короткий "влёт" фиксированной длительности выглядит естественнее, чем
+// экстраполяция на несколько минут назад при большом cfg.pollSec.
+static const uint32_t NEW_PLANE_ANIM_MS = 15000;
+// OpenSky (анонимно) иногда "теряет" борт на один опрос (шум/rate-limit), хотя
+// он всё ещё в зоне — если сразу забывать такой борт, он на следующем опросе
+// матчится заново как "новый" и получает короткую экстраполяцию от актуальной
+// точки назад, которая никак не связана с тем, где он реально сидел на экране —
+// выглядит как рывок. Поэтому пропавших бортов держим на месте (не обновляя)
+// вплоть до этого тайм-аута, и только потом убираем окончательно.
+static const uint32_t PLANE_STALE_MS = 3 * 60 * 1000UL;
 
 static const double DEG2RAD    = 3.14159265358979323846 / 180.0;
 static const double M_PER_DEG  = 111320.0;
@@ -320,6 +374,23 @@ static void latLonToDistBrg(double lat, double lon, float &distM, float &brgDeg)
     distM  = (float)sqrt(dx * dx + dy * dy);
     brgDeg = (float)(atan2(dx, dy) / DEG2RAD);
     if (brgDeg < 0) brgDeg += 360.0f;
+}
+
+// Сдвинуть точку на distM метров по курсу bearingDeg (отрицательный distM —
+// назад, против курса). Та же равнопрямоугольная аппроксимация, что выше.
+static void moveLatLon(double lat, double lon, float bearingDeg, float distM,
+                        float &outLat, float &outLon) {
+    double rad    = bearingDeg * DEG2RAD;
+    double dNorth = distM * cos(rad);
+    double dEast  = distM * sin(rad);
+    outLat = (float)(lat + dNorth / M_PER_DEG);
+    outLon = (float)(lon + dEast / (M_PER_DEG * cos(lat * DEG2RAD)));
+}
+
+// Интерполяция угла по кратчайшей стороне (350°→10° идёт через 0°, а не через 180°)
+static float lerpAngleDeg(float a0, float a1, float t) {
+    float diff = fmodf(a1 - a0 + 540.0f, 360.0f) - 180.0f;
+    return a0 + diff * t;
 }
 
 static bool fetchPlanes() {
@@ -337,6 +408,7 @@ static bool fetchPlanes() {
     int code = http.GET();
     if (code != HTTP_CODE_OK) {
         Serial.printf("OpenSky HTTP %d (429 = кончились анонимные кредиты на сегодня)\n", code);
+        snprintf(planeErr, sizeof(planeErr), "http %d", code);
         http.end();
         return false;
     }
@@ -356,35 +428,95 @@ static bool fetchPlanes() {
     DeserializationError err = deserializeJson(doc, payload, DeserializationOption::Filter(filter));
     if (err) {
         Serial.printf("JSON parse error: %s (payload %u bytes)\n", err.c_str(), payload.length());
+        strcpy(planeErr, "json err");
         return false;
     }
+    planeErr[0] = '\0';
 
     JsonArray states = doc["states"].as<JsonArray>();
     Serial.printf("HTTP %d, payload %u bytes, states: %u, heap %u\n",
                   code, payload.length(), (unsigned)states.size(), ESP.getFreeHeap());
 
-    planeCount = 0;
+    // Мержим входящие данные ПРЯМО в живой planes[] (по icao24), а не
+    // пересобираем массив с нуля — так борт, пропавший всего на один опрос
+    // (шум анонимного OpenSky), остаётся на месте вместо того, чтобы каждый
+    // раз попадать в "новый" и дёргаться экстраполяцией от случайной точки.
+    uint32_t now = millis();
+    static bool seen[MAX_PLANES];
+    memset(seen, 0, sizeof(seen));
+    int matchedCount = 0, newCount = 0;   // диагностика
+
     for (JsonArray st : states) {
-        if (planeCount >= cfg.maxPlanes) break;
         if (st[6].isNull() || st[5].isNull()) continue;   // нет позиции
         if (st[8] | false) continue;                       // на земле — не интересно
 
-        Plane &p = planes[planeCount];
+        const char* icao = st[0] | "";
+        char icaoBuf[7];
+        strncpy(icaoBuf, icao, sizeof(icaoBuf) - 1);
+        icaoBuf[sizeof(icaoBuf) - 1] = '\0';
+
+        int idx = -1;
+        for (int j = 0; j < planeCount; j++) {
+            if (strcmp(planes[j].icao24, icaoBuf) == 0) { idx = j; break; }
+        }
+        bool isNewPlane = (idx < 0);
+        if (isNewPlane) {
+            if (planeCount >= cfg.maxPlanes) continue;   // некуда — пропускаем этот борт
+            idx = planeCount++;
+        }
+
+        Plane &p = planes[idx];
+        strcpy(p.icao24, icaoBuf);
         const char* cs = st[1] | "";
         strncpy(p.callsign, cs, sizeof(p.callsign) - 1);
         p.callsign[sizeof(p.callsign) - 1] = '\0';
         for (int i = strlen(p.callsign) - 1; i >= 0 && p.callsign[i] == ' '; i--) p.callsign[i] = '\0';
 
-        p.lat      = st[6];
-        p.lon      = st[5];
+        float newLat = st[6], newLon = st[5];
+        float newTrack = st[10] | 0.0f;
         p.altM     = st[7] | 0.0f;
         p.speedMs  = st[9] | 0.0f;
-        p.track    = st[10] | 0.0f;
         p.category = (int8_t)(st[17] | 0);
-        latLonToDistBrg(p.lat, p.lon, p.distM, p.brgDeg);
-        planeCount++;
+
+        if (isNewPlane) {
+            // Совсем новый борт (либо первый опрос вообще) — короткий "влёт"
+            // экстраполяцией назад по курсу/скорости, курс всё это время не
+            // меняем (нет данных, откуда он реально летел).
+            float extrapSec = NEW_PLANE_ANIM_MS / 1000.0f;
+            moveLatLon(newLat, newLon, newTrack, -p.speedMs * extrapSec, p.prevLat, p.prevLon);
+            p.prevTrack = newTrack;
+            p.animDurMs = NEW_PLANE_ANIM_MS;
+            newCount++;
+        } else {
+            // Уже трекали этот борт — T0 это его последняя реальная позиция и
+            // курс, animDurMs — сколько реально прошло с ТОГО момента (может
+            // быть больше одного pollSec, если борт до этого пропадал пару
+            // опросов подряд — см. PLANE_STALE_MS).
+            p.prevLat   = p.lat;
+            p.prevLon   = p.lon;
+            p.prevTrack = p.track;
+            p.animDurMs = now - p.animStartMs;
+            matchedCount++;
+        }
+        p.lat   = newLat;
+        p.lon   = newLon;
+        p.track = newTrack;
+        p.animStartMs = now;
+        seen[idx] = true;
     }
-    Serial.printf("OpenSky: %d planes in range\n", planeCount);
+
+    // Пропавшие борты не удаляем сразу (см. комментарий у PLANE_STALE_MS) —
+    // убираем только тех, кого не видно уже слишком долго.
+    int kept = 0;
+    for (int i = 0; i < planeCount; i++) {
+        if (seen[i] || (now - planes[i].animStartMs) < PLANE_STALE_MS) {
+            if (kept != i) planes[kept] = planes[i];
+            kept++;
+        }
+    }
+    planeCount = kept;
+
+    Serial.printf("OpenSky: %d planes in range (%d matched, %d new)\n", planeCount, matchedCount, newCount);
     return true;
 }
 
@@ -450,8 +582,10 @@ static void makeUfoIcon(uint16_t col) {
 }
 
 // Нарисовать борт: иконка по категории, цвет по высоте, поворот по курсу.
+// headingDeg — интерполированный (не мгновенно-новый) курс, см. lerpAngleDeg
+// в drawRadar(): иначе иконка мгновенно доворачивалась бы в момент T1.
 // Без категории (0/1) — обычный самолёт: лайнеры часто не шлют категорию.
-static void drawPlaneIcon(int x, int y, const Plane &p) {
+static void drawPlaneIcon(int x, int y, const Plane &p, float headingDeg) {
     if (p.category == 14) {                               // БПЛА — НЛО :)
         makeUfoIcon(hsv565(85, 255, 255));
         iconSpr.pushRotateZoom(&spr, x, y, 0.0f, 1.0f, 1.0f, ICON_TRANSP);
@@ -464,7 +598,7 @@ static void drawPlaneIcon(int x, int y, const Plane &p) {
         iconSpr.pushRotateZoom(&spr, x, y, 0.0f, size, size, ICON_TRANSP);
     } else {
         makeAirplaneIcon(col);
-        iconSpr.pushRotateZoom(&spr, x, y, p.track, size, size, ICON_TRANSP);
+        iconSpr.pushRotateZoom(&spr, x, y, headingDeg, size, size, ICON_TRANSP);
     }
 }
 
@@ -481,18 +615,19 @@ static void drawLegend() {
     spr.setTextSize(1);
     spr.setTextDatum(lgfx::middle_center);
     spr.setTextColor(altColor(11000.0f), C_BLACK);
-    spr.drawString("11k", 168, 37);        // у верхнего конца дуги
+    spr.drawString("11k", 168, 17);        // у верхнего конца дуги
     spr.setTextColor(altColor(0.0f), C_BLACK);
-    spr.drawString("0m", 168, 203);        // у нижнего
+    spr.drawString("0m", 168, 223);        // у нижнего
     spr.setTextDatum(lgfx::middle_right);
     spr.setTextColor(altColor(5500.0f), C_BLACK);
-    spr.drawString("6k", 208, 120);        // середина шкалы
+    spr.drawString("6k", 228, 120);        // середина шкалы
 }
 
 static void drawRadar() {
     const int cx = 120, cy = 120;
 
-    if (!drawMapBackground()) spr.fillSprite(C_BLACK);
+    if (mapLoaded) mapSprite.pushSprite(&spr, 0, 0);
+    else spr.fillSprite(C_BLACK);
 
     // Сетка поверх карты — приглушённая
     spr.drawCircle(cx, cy, RADAR_R,         C_DGREY);
@@ -512,19 +647,36 @@ static void drawRadar() {
     int shown = 0;
     int nearestIdx = -1;
     float nearestDist = 1e12f;
+    uint32_t nowMs = millis();
 
     for (int i = 0; i < planeCount; i++) {
         Plane &p = planes[i];
-        if (p.distM > cfg.rangeKm * 1000.0f) continue;
-        float r = p.distM * pxScale;
-        double a = p.brgDeg * DEG2RAD;
+
+        // Позиция каждого борта интерполируется по своему собственному
+        // таймеру: обычные борта — на всю длину интервала между опросами,
+        // только что появившиеся — на короткий "влёт" (см. fetchPlanes()).
+        float frac = 1.0f;
+        if (p.animDurMs > 0) {
+            frac = (nowMs - p.animStartMs) / (float)p.animDurMs;
+            if (frac < 0.0f) frac = 0.0f;
+            if (frac > 1.0f) frac = 1.0f;
+        }
+        float iLat = p.prevLat + (p.lat - p.prevLat) * frac;
+        float iLon = p.prevLon + (p.lon - p.prevLon) * frac;
+        float heading = lerpAngleDeg(p.prevTrack, p.track, frac);
+
+        float distM, brgDeg;
+        latLonToDistBrg(iLat, iLon, distM, brgDeg);
+        if (distM > cfg.rangeKm * 1000.0f) continue;
+        float r = distM * pxScale;
+        double a = brgDeg * DEG2RAD;
         int x = cx + (int)(r * sin(a));
         int y = cy - (int)(r * cos(a));
 
-        drawPlaneIcon(x, y, p);
+        drawPlaneIcon(x, y, p, heading);
 
         shown++;
-        if (p.distM < nearestDist) { nearestDist = p.distM; nearestIdx = i; }
+        if (distM < nearestDist) { nearestDist = distM; nearestIdx = i; }
     }
 
     drawLegend();
@@ -547,14 +699,29 @@ static void drawRadar() {
         char line[32];
         uint16_t col = altColor(p.altM);
         snprintf(line, sizeof(line), "%s  %.1fkm",
-                 p.callsign[0] ? p.callsign : "?", p.distM / 1000.0f);
+                 p.callsign[0] ? p.callsign : "?", nearestDist / 1000.0f);
         spr.setTextColor(col, C_BLACK);
         spr.drawString(line, cx, 204);
         snprintf(line, sizeof(line), "%.0fm  %.0fkm/h", p.altM, p.speedMs * 3.6f);
         spr.drawString(line, cx, 216);
     } else {
         spr.setTextColor(C_GREY, C_BLACK);
-        spr.drawString("no planes", cx, 210);
+        if (planeErr[0]) {
+            char line[40];
+            snprintf(line, sizeof(line), "no planes (%s)", planeErr);
+            spr.drawString(line, cx, 210);
+        } else {
+            spr.drawString("no planes", cx, 210);
+        }
+    }
+
+    // Причина отсутствия карты — мелким текстом у центра (там всё равно
+    // пусто/чёрно, когда карты нет). Серийный монитор на этом чипе капризный,
+    // поэтому дублируем причину прямо на экран.
+    if (!mapLoaded && mapErr[0]) {
+        spr.setTextDatum(lgfx::middle_center);
+        spr.setTextColor(C_DGREY, C_BLACK);
+        spr.drawString(mapErr, cx, 96);
     }
 
     spr.pushSprite(0, 0);
@@ -719,6 +886,18 @@ void setup() {
     iconSpr.createSprite(24, 24);
     iconSpr.setPivot(11.5f, 11.5f);
 
+    // Кэш декодированного фона карты: декодируется раз в fetchMap(), не на
+    // каждый кадр (кадры теперь рисуются постоянно ради анимации самолётов)
+    mapSprite.setColorDepth(16);
+    mapSprite.setSwapBytes(true);
+    mapSprite.setPsram(true);
+    mapSpriteOk = mapSprite.createSprite(240, 240);
+    if (!mapSpriteOk) {
+        mapSprite.setPsram(false);
+        mapSpriteOk = mapSprite.createSprite(240, 240);
+    }
+    if (!mapSpriteOk) Serial.println("mapSprite: createSprite failed, радар без карты");
+
     loadConfig();
 
     if (connectWiFi()) {
@@ -726,7 +905,7 @@ void setup() {
         statusScreen("Web UI", ip.c_str(), C_CYAN);   // адрес настроек — на экран
         delay(2000);
         startWebServer();
-        mapLoaded = fetchMap();
+        mapLoaded = fetchMap() && cacheMapBackground();
         if (!mapLoaded) Serial.println("Радар без карты (нет токена или ошибка загрузки)");
     }
 }
@@ -746,14 +925,17 @@ void loop() {
 
     if (mapDirty) {           // настройки сменились — перекачать карту
         mapDirty = false;
-        mapLoaded = fetchMap();
+        mapLoaded = fetchMap() && cacheMapBackground();
     }
 
     if (forceRefresh || millis() - lastFetchMs >= cfg.pollSec * 1000UL) {
         forceRefresh = false;
         lastFetchMs = millis();
-        if (fetchPlanes()) drawRadar();
+        fetchPlanes();
     }
 
-    delay(10);
+    // Рисуем каждый кадр (не только сразу после fetchPlanes) — самолёты
+    // интерполируются между T0/T1 по своему таймеру внутри drawRadar().
+    drawRadar();
+    delay(40);   // ~25 fps — фон карты уже закэширован, декода PNG тут нет
 }
