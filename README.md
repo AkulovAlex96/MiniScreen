@@ -8,6 +8,7 @@
 
 | Папка | Что это |
 |---|---|
+| [firmware_hub](firmware_hub/) | **Объединённая прошивка**: все экраны как модули (часы/календарь/радар/GIF/погода/карты), веб-морда с тумблерами экранов и настройками, файл-менеджер SD, OTA. Остальные `firmware_*` — прототипы для отладки отдельных экранов. Архитектура: [ARCHITECTURE.md](firmware_hub/ARCHITECTURE.md) |
 | [firmware_demo](firmware_demo/) | Базовый тест дисплея: цвета, радуга, текст. Подключение: [WIRING.md](firmware_demo/WIRING.md) |
 | [firmware_widgets](firmware_widgets/) | 8 виджетов: аналоговые/цифровые часы, календарь, лоадеры, gauge, матрица, звёзды |
 | [firmware_gif](firmware_gif/) | Проигрывание GIF из flash (конвертер в комплекте). Оптимизация/поиск гифок: [GIF_TOOLS.md](firmware_gif/GIF_TOOLS.md) |
