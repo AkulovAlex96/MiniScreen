@@ -591,6 +591,10 @@ public:
         if (mapDirty) {
             mapDirty = false;
             mapLoaded = fetchMap() && cacheMapBackground();
+            // Карта готова — показываем её (со старыми бортами) до того, как
+            // заблокируемся на втором HTTPS-запросе за свежими координатами
+            drawRadar();
+            spr.pushSprite(0, 0);
         }
 
         if (forceRefresh || nowMs - lastFetchMs >= cfg.pollSec * 1000UL) {

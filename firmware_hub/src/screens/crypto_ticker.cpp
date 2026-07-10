@@ -123,7 +123,11 @@ class CryptoScreen : public Screen {
     int   closesLen = 0;
 
     bool haveTicker = false, haveKlines = false;
-    bool forceRefresh = true, needsRedraw = true;
+    bool needsRedraw = true;
+    // Котировка и свечи — раздельные блокирующие HTTPS-запросы (свой TLS-
+    // хендшейк у каждого). За один tick() делаем не больше одного, иначе
+    // переход на экран виснет на сумму двух хендшейков разом (см. tick()).
+    bool wantTicker = true, wantKlines = true;
     uint32_t lastTickerMs = 0, lastKlinesMs = 0;
 
     void loadConfig() {
@@ -321,15 +325,26 @@ public:
             return true;
         }
 
-        if (forceRefresh || nowMs - lastTickerMs >= TICKER_POLL_MS) {
-            lastTickerMs = nowMs;
-            if (fetchTicker()) needsRedraw = true;
+        if (nowMs - lastTickerMs >= TICKER_POLL_MS) wantTicker = true;
+        if (nowMs - lastKlinesMs >= KLINES_POLL_MS) wantKlines = true;
+
+        if (wantTicker || wantKlines) {
+            if (!haveTicker) {
+                // Первый заход (или смена монеты) — статус на экран ДО
+                // блокирующего фетча, иначе переход выглядит как зависание.
+                statusScreen(COINS[coinIdx].pair, "loading...", C_CYAN);
+                spr.pushSprite(0, 0);
+            }
+            if (wantTicker) {
+                lastTickerMs = nowMs;
+                wantTicker = false;
+                if (fetchTicker()) needsRedraw = true;
+            } else {
+                lastKlinesMs = nowMs;
+                wantKlines = false;
+                if (fetchKlines()) needsRedraw = true;
+            }
         }
-        if (forceRefresh || nowMs - lastKlinesMs >= KLINES_POLL_MS) {
-            lastKlinesMs = nowMs;
-            if (fetchKlines()) needsRedraw = true;
-        }
-        forceRefresh = false;
 
         if (!haveTicker) {
             statusScreen(COINS[coinIdx].pair, "loading...", C_CYAN);
@@ -344,7 +359,7 @@ public:
     uint32_t frameDelayMs() const override { return 500; }
 
     void onButton(BtnEvent ev) override {
-        if (ev == EV_BTN1_SHORT) forceRefresh = true;
+        if (ev == EV_BTN1_SHORT) { wantTicker = true; wantKlines = true; }
     }
 
     void getConfig(JsonObject out) override {
@@ -373,7 +388,8 @@ public:
             saveConfig();
             if (symChanged) haveTicker = false;
             haveKlines = false;   // символ или интервал сменился — свечи всегда переспрашиваем
-            forceRefresh = true;
+            wantTicker = true;
+            wantKlines = true;
             needsRedraw = true;
         }
     }

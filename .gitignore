@@ -8,6 +8,7 @@
 # Генерируемые артефакты GIF (пересоздаются tools/convert_gif.py)
 firmware_gif/src/*_gif.h
 firmware_gif/tools/*_240.gif
+gif/
 
 __pycache__/
 

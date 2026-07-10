@@ -183,6 +183,7 @@ public:
                 return true;
             }
             redraw = true;
+            spr.pushSprite(0, 0);   // карта готова — показываем её до фетча погоды
         }
 
         if (forceRefresh || lastWeatherMs == 0 || nowMs - lastWeatherMs >= WEATHER_INTERVAL_MS) {
