@@ -63,9 +63,20 @@ static void saveConfig() {
 }
 
 // ─── Карта-подложка (Mapbox static) ──────────────────────────────────────────
-// PNG качается в общий netBuf и декодируется ОДИН РАЗ за фетч в PSRAM-спрайт
-// mapSprite; drawRadar() дергается каждый кадр ради анимации самолётов, декод
-// PNG каждый кадр был бы слишком дорогим — просто копируем mapSprite в spr.
+// Сжатый PNG живёт в СОБСТВЕННОМ постоянном PSRAM-буфере (не в общем netBuf):
+// при возврате на экран карта не перекачивается — только повторный декод в
+// mapSprite (~100мс, без сети). Декод — один раз за фетч/заход; drawRadar()
+// дергается каждый кадр ради анимации самолётов и просто копирует mapSprite.
+
+static const size_t MAP_BUF_SIZE = 48 * 1024;
+static uint8_t* mapBufGet() {
+    static uint8_t* buf = nullptr;
+    if (!buf) {
+        buf = (uint8_t*)ps_malloc(MAP_BUF_SIZE);
+        if (!buf) buf = (uint8_t*)malloc(MAP_BUF_SIZE);
+    }
+    return buf;
+}
 
 static size_t  mapLen = 0;
 static bool    mapLoaded = false;
@@ -86,7 +97,7 @@ static int pngDraw(PNGDRAW *pDraw) {
 
 static bool fetchMap() {
     if (!MAPBOX_TOKEN[0]) { strcpy(mapErr, "no token"); return false; }
-    uint8_t* mapBuf = netBufGet();
+    uint8_t* mapBuf = mapBufGet();
     if (!mapBuf) { strcpy(mapErr, "no buf"); return false; }
 
     // Дробный зум подбираем так, чтобы rangeKm пришлось ровно на RADAR_R px:
@@ -103,6 +114,7 @@ static bool fetchMap() {
         style, hubCfg.homeLon, hubCfg.homeLat, zoom, MAPBOX_TOKEN);
 
     statusScreen("Loading map", style, C_CYAN);
+    spr.pushSprite(0, 0);   // впереди блокирующий фетч — статус на экран сразу
     // На случай, если предыдущая попытка прервалась посреди чтения тела —
     // secureClient мог остаться в наполовину открытом состоянии. Форсируем
     // чистое соединение.
@@ -126,10 +138,10 @@ static bool fetchMap() {
     mapLen = 0;
     uint32_t lastByteMs = millis();
     const char* exitReason = "maxbuf";
-    while (http.connected() && mapLen < NET_BUF_SIZE) {
+    while (http.connected() && mapLen < MAP_BUF_SIZE) {
         size_t avail = stream->available();
         if (avail > 0) {
-            size_t want = min(avail, NET_BUF_SIZE - mapLen);
+            size_t want = min(avail, MAP_BUF_SIZE - mapLen);
             int n = stream->readBytes(mapBuf + mapLen, want);
             mapLen += n;
             if (remaining > 0) { remaining -= n; if (remaining <= 0) { exitReason = "done"; break; } }
@@ -153,11 +165,11 @@ static bool fetchMap() {
     return true;
 }
 
-// Распаковать PNG карты в mapSprite — один раз на каждый fetchMap(), не на
-// каждый кадр. Вызывающий код сам гарантирует, что netBuf/mapLen валидны.
+// Распаковать PNG карты в mapSprite — один раз на каждый fetchMap()/onEnter(),
+// не на каждый кадр. Вызывающий код сам гарантирует, что mapBuf/mapLen валидны.
 static bool cacheMapBackground() {
     if (!mapSpriteOk) { strcpy(mapErr, "no sprite"); return false; }
-    if (png.openRAM(netBufGet(), mapLen, pngDraw) != PNG_SUCCESS) { strcpy(mapErr, "png open"); return false; }
+    if (png.openRAM(mapBufGet(), mapLen, pngDraw) != PNG_SUCCESS) { strcpy(mapErr, "png open"); return false; }
     int rc = png.decode(nullptr, 0);
     png.close();
     if (rc != PNG_SUCCESS) { strcpy(mapErr, "png decode"); return false; }
@@ -523,8 +535,6 @@ static void drawRadar() {
         spr.setTextColor(C_DGREY, C_BLACK);
         spr.drawString(mapErr, cx, 96);
     }
-
-    spr.pushSprite(0, 0);
 }
 
 } // namespace radar
@@ -555,9 +565,13 @@ public:
             mapSpriteOk = mapSprite.createSprite(240, 240);
         }
 
+        // Сжатый PNG карты пережил уход с экрана — если конфиг не менялся,
+        // просто декодируем его заново, БЕЗ похода в сеть. Данные бортов тоже
+        // не перезапрашиваем принудительно: у OpenSky (аноним) ~400 запросов
+        // в день, таймер pollSec сам решит, пора ли.
         mapLoaded = false;
-        mapDirty = true;       // перекачать карту при первом tick
-        forceRefresh = true;   // и данные бортов тоже
+        if (!mapDirty && mapLen > 0) mapLoaded = cacheMapBackground();
+        if (!mapLoaded) mapDirty = true;
     }
 
     void onExit() override {
@@ -567,11 +581,11 @@ public:
         mapLoaded = false;
     }
 
-    void tick(uint32_t nowMs) override {
+    bool tick(uint32_t nowMs) override {
         using namespace radar;
         if (!netUp()) {
             statusScreen("Radar", "no WiFi", C_RED);
-            return;
+            return true;
         }
 
         if (mapDirty) {
@@ -587,6 +601,7 @@ public:
 
         // Рисуем каждый кадр — самолёты интерполируются между T0/T1
         drawRadar();
+        return true;
     }
 
     uint32_t frameDelayMs() const override { return 40; }   // ~25 fps

@@ -31,7 +31,7 @@ button.primary{background:#17a05e;border:0}
 .cfg label{display:block;margin:6px 0;color:#8cf;font-size:13px}
 .cfg input[type=text],.cfg input:not([type]){width:100%;padding:6px;background:#222;color:#eee;border:1px solid #444;border-radius:6px;box-sizing:border-box}
 select{padding:6px;background:#222;color:#eee;border:1px solid #444;border-radius:6px;margin-bottom:6px}
-p.links{margin-top:24px}a{color:#8cf}
+p.links{margin-top:24px}a{color:#8cf}.muted{color:#777;font-size:13px}
 </style></head><body>
 <h1>MiniScreen Hub</h1>
 <div id='list'></div>
@@ -62,13 +62,26 @@ const cfg=document.createElement('div');cfg.className='cfg';cfg.style.display='n
 el.appendChild(row)})}
 async function saveEnabled(){const en=[...document.querySelectorAll('#list input[type=checkbox]')]
 .filter(c=>c.checked).map(c=>c.dataset.id);await api('/api/screens',{enabled:en});load()}
+async function toggleCfg(id,row){const div=row.querySelector('.cfg');
+if(div.style.display!=='none'){div.style.display='none';return}
+const cfg=await api('/api/config?screen='+id);
+if(typeof cfg!=='object'||cfg===null||!Object.keys(cfg).length){
+div.innerHTML='<span class=muted>у этого экрана нет настроек</span>'}
+else{buildForm(div,cfg,id)}
+div.style.display='block'}
 function buildForm(div,obj,id){div.innerHTML='';
-for(const k in obj){const lab=document.createElement('label');lab.textContent=k+' ';
-const inp=document.createElement('input');
+for(const k in obj){if(k.endsWith('Options'))continue;
+const lab=document.createElement('label');lab.textContent=k+' ';
+const opts=obj[k+'Options'];let inp;
+if(Array.isArray(opts)){inp=document.createElement('select');
+opts.forEach(o=>{const op=document.createElement('option');op.value=o;op.textContent=o;
+if(o===obj[k])op.selected=true;inp.appendChild(op)});inp.dataset.t='string'}
+else{inp=document.createElement('input');
 if(typeof obj[k]==='boolean'){inp.type='checkbox';inp.checked=obj[k]}else{inp.value=obj[k]}
-inp.dataset.k=k;inp.dataset.t=typeof obj[k];lab.appendChild(inp);div.appendChild(lab)}
+inp.dataset.t=typeof obj[k]}
+inp.dataset.k=k;lab.appendChild(inp);div.appendChild(lab)}
 const b=document.createElement('button');b.className='primary';b.textContent='Сохранить';
-b.onclick=async()=>{const o={};div.querySelectorAll('input[data-k]').forEach(i=>{
+b.onclick=async()=>{const o={};div.querySelectorAll('[data-k]').forEach(i=>{
 o[i.dataset.k]=i.dataset.t==='boolean'?i.checked:(i.dataset.t==='number'?parseFloat(i.value):i.value)});
 await api('/api/config?screen='+id,o);load()};div.appendChild(b)}
 async function loadHub(){const div=document.querySelector('#hub .cfg');
@@ -176,6 +189,34 @@ static void handleConfigPost() {
     server.send(200, "application/json", "{\"ok\":true}");
 }
 
+// ─── Общий стиль внутренних страниц (/files, /update) — как у главной ────────
+
+static const char PAGE_CSS[] PROGMEM =
+    "body{font-family:sans-serif;background:#111;color:#eee;max-width:460px;margin:20px auto;padding:0 12px}"
+    "h1{font-size:20px}h2{font-size:16px;color:#8cf;margin-top:24px}a{color:#8cf}"
+    ".row{background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:8px 10px;margin:6px 0;"
+    "display:flex;align-items:center;gap:8px;flex-wrap:wrap}"
+    ".name{flex:1;word-break:break-all}.muted{color:#777;font-size:13px}"
+    "button,input[type=submit],a.btn{padding:6px 10px;background:#333;border:1px solid #555;"
+    "border-radius:6px;color:#eee;cursor:pointer;text-decoration:none;font-size:14px}"
+    ".primary{background:#17a05e;border:0}a.btn.danger{border-color:#a33}"
+    "input[type=file]{color:#aaa;flex:1;min-width:0}";
+
+// Обёртка страницы: шапка с ссылкой назад + общий CSS
+static String pageBegin(const char* title) {
+    String h;
+    h.reserve(4096);
+    h += F("<!DOCTYPE html><html><head><meta charset='utf-8'>"
+           "<meta name='viewport' content='width=device-width,initial-scale=1'><title>");
+    h += title;
+    h += F("</title><style>");
+    h += FPSTR(PAGE_CSS);
+    h += F("</style></head><body><p><a href='/'>&larr; MiniScreen Hub</a></p><h1>");
+    h += title;
+    h += F("</h1>");
+    return h;
+}
+
 // ─── Файл-менеджер SD (из firmware_gif_sd) ───────────────────────────────────
 // Без авторизации — только для домашней сети, не выставлять наружу.
 
@@ -188,33 +229,38 @@ static String htmlEscape(const String& s) {
 }
 
 static void handleFiles() {
+    String html = pageBegin("Файлы на SD");
     if (!sdMountIfNeeded()) {
-        server.send(200, "text/html; charset=utf-8",
-                    "<html><body><h3>Нет SD-карты</h3><a href='/'>назад</a></body></html>");
+        html += F("<div class='row'><span class='name'>Нет SD-карты</span></div></body></html>");
+        server.send(200, "text/html; charset=utf-8", html);
         return;
     }
-    String html = "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-                  "<title>MiniScreen: файлы</title></head><body><a href='/'>&larr; назад</a>";
-    html += "<h3>GIF на карте</h3><ul>";
+    int count = 0;
     File dir = SD.open(GIF_DIR);
     if (dir && dir.isDirectory()) {
         File f = dir.openNextFile();
         while (f) {
             if (!f.isDirectory()) {
                 String n = htmlEscape(String(f.name()));
-                html += "<li>" + n + " (" + String(f.size() / 1024) + " КБ)"
-                        " &mdash; <a href='/download?name=" + n + "'>скачать</a>"
-                        " | <a href='/delete?name=" + n + "' onclick=\"return confirm('Удалить " + n + "?')\">удалить</a></li>";
+                html += "<div class='row'><span class='name'>" + n +
+                        " <span class='muted'>(" + String(f.size() / 1024) + " КБ)</span></span>"
+                        "<a class='btn' href='/download?name=" + n + "'>скачать</a>"
+                        "<a class='btn danger' href='/delete?name=" + n +
+                        "' onclick=\"return confirm('Удалить " + n + "?')\">удалить</a></div>";
+                count++;
             }
             f.close();
             f = dir.openNextFile();
         }
         dir.close();
     }
-    html += "</ul><h3>Загрузить GIF</h3>"
-            "<form method='POST' action='/upload' enctype='multipart/form-data'>"
-            "<input type='file' name='data' accept='.gif'> "
-            "<input type='submit' value='Загрузить'></form></body></html>";
+    if (!count) html += F("<div class='row'><span class='name muted'>Гифок пока нет — закинь .gif ниже</span></div>");
+    html += F("<h2>Загрузить GIF</h2>"
+              "<form class='row' method='POST' action='/upload' enctype='multipart/form-data'>"
+              "<input type='file' name='data' accept='.gif'>"
+              "<input class='primary' type='submit' value='Загрузить'></form>"
+              "<p class='muted'>Файлы кладутся в /gif на карте; GIF-плеер подхватит сразу.</p>"
+              "</body></html>");
     server.send(200, "text/html; charset=utf-8", html);
 }
 
@@ -269,13 +315,16 @@ static void handleDelete() {
 
 // ─── OTA ──────────────────────────────────────────────────────────────────────
 
-static const char UPDATE_HTML[] PROGMEM = R"html(<!DOCTYPE html><html><head><meta charset='utf-8'>
-<title>OTA</title></head><body><a href='/'>&larr; назад</a>
-<h3>Обновление прошивки</h3>
-<p>Файл: <code>.pio/build/esp32-s3/firmware.bin</code>. После загрузки девайс перезагрузится.</p>
-<form method='POST' action='/update' enctype='multipart/form-data'>
-<input type='file' name='update' accept='.bin'> <input type='submit' value='Прошить'></form>
-</body></html>)html";
+static void handleUpdatePage() {
+    String html = pageBegin("Обновление прошивки");
+    html += F("<p class='muted'>Файл: <code>.pio/build/esp32-s3/firmware.bin</code>. "
+              "После загрузки девайс перезагрузится сам.</p>"
+              "<form class='row' method='POST' action='/update' enctype='multipart/form-data'>"
+              "<input type='file' name='update' accept='.bin'>"
+              "<input class='primary' type='submit' value='Прошить'></form>"
+              "</body></html>");
+    server.send(200, "text/html; charset=utf-8", html);
+}
 
 static void handleUpdatePost() {
     bool ok = !Update.hasError();
@@ -317,7 +366,7 @@ void webuiStart() {
     server.on("/download", HTTP_GET,  handleDownload);
     server.on("/delete",   HTTP_GET,  handleDelete);
 
-    server.on("/update", HTTP_GET, []() { server.send_P(200, "text/html", UPDATE_HTML); });
+    server.on("/update", HTTP_GET, handleUpdatePage);
     server.on("/update", HTTP_POST, handleUpdatePost, handleUpdateUpload);
 
     server.begin();

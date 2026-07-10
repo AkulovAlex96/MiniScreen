@@ -35,7 +35,8 @@ uint16_t hsv565(uint8_t h, uint8_t s, uint8_t v);
 void arcSeg(int r0, int r1, float a0, float a1, uint16_t col);
 // Толстая стрелка часов/gauge (треугольник от центра)
 void drawHand(float angRad, float len, float halfW, float tail, uint16_t col);
-// Статус-экран: две строки текста в цветном кольце (сам пушит на дисплей)
+// Статус-экран: две строки текста в цветном кольце. Только рисует в spr,
+// НЕ пушит (в tick() экрана пуш делает ядро; вне tick — пушить явно)
 void statusScreen(const char* line1, const char* line2, uint16_t col);
 
 namespace gfx {

@@ -33,6 +33,7 @@ void setup() {
 
     if (netConnect()) {
         statusScreen("Web UI", WiFi.localIP().toString().c_str(), C_CYAN);
+        spr.pushSprite(0, 0);   // мы вне tick() экрана — пушим сами
         delay(1500);
         webuiStart();
     }

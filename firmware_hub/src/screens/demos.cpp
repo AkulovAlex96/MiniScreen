@@ -12,7 +12,7 @@ public:
     const char* id() const override    { return "loader_ring"; }
     const char* title() const override { return "Ring loader"; }
 
-    void tick(uint32_t nowMs) override {
+    bool tick(uint32_t nowMs) override {
         spr.fillSprite(C_BLACK);
 
         // 0→100% по синусу, цикл ~6 сек
@@ -38,7 +38,7 @@ public:
         spr.setTextColor(C_GREY);
         spr.drawString(p > 99.0f ? "complete" : "loading...", 120, 152);
 
-        spr.pushSprite(0, 0);
+        return true;
     }
 };
 
@@ -49,7 +49,7 @@ public:
     const char* id() const override    { return "loader_bar"; }
     const char* title() const override { return "Progress bar"; }
 
-    void tick(uint32_t nowMs) override {
+    bool tick(uint32_t nowMs) override {
         spr.fillSprite(C_BLACK);
 
         float phase = nowMs / 3000.0f * PI;
@@ -85,7 +85,7 @@ public:
         spr.setTextColor(C_GREY);
         spr.drawString(dbuf, 120, 156);
 
-        spr.pushSprite(0, 0);
+        return true;
     }
 };
 
@@ -96,7 +96,7 @@ public:
     const char* id() const override    { return "gauge"; }
     const char* title() const override { return "Gauge"; }
 
-    void tick(uint32_t nowMs) override {
+    bool tick(uint32_t nowMs) override {
         spr.fillSprite(C_BLACK);
 
         // Значение — плавный «случайный» дрейф
@@ -141,7 +141,7 @@ public:
         spr.setTextColor(C_GREY);
         spr.drawString("km/h", 120, 196);
 
-        spr.pushSprite(0, 0);
+        return true;
     }
 };
 
@@ -184,7 +184,7 @@ public:
         for (int c = 0; c < COLS; c++) resetCol(c, true);
     }
 
-    void tick(uint32_t) override {
+    bool tick(uint32_t) override {
         spr.setFont(&lgfx::fonts::Font0);
         spr.setTextSize(2);
         spr.setTextDatum(lgfx::top_left);
@@ -202,7 +202,7 @@ public:
             if (h - len[c] > ROWS) resetCol(c, false);
         }
 
-        spr.pushSprite(0, 0);
+        return true;
     }
 };
 
@@ -227,7 +227,7 @@ public:
         for (auto& s : stars) reset(s);
     }
 
-    void tick(uint32_t) override {
+    bool tick(uint32_t) override {
         spr.fillSprite(C_BLACK);
 
         for (auto& s : stars) {
@@ -243,7 +243,7 @@ public:
             spr.fillRect(px, py, sz, sz, rgb565(b, b, b));
         }
 
-        spr.pushSprite(0, 0);
+        return true;
     }
 };
 

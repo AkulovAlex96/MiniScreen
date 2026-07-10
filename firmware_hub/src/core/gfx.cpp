@@ -92,6 +92,9 @@ void drawHand(float angRad, float len, float halfW, float tail, uint16_t col) {
                      (int)(bX - px * halfW), (int)(bY - py * halfW), col);
 }
 
+// НЕ пушит спрайт: внутри tick() экрана пуш сделает ядро (см. core/screen.h).
+// Если статус нужен на экране немедленно (перед блокирующим фетчем или вне
+// tick) — явный spr.pushSprite(0,0) после вызова.
 void statusScreen(const char* line1, const char* line2, uint16_t col) {
     spr.fillSprite(C_BLACK);
     spr.fillArc(120, 120, 119, 116, 0.0f, 360.0f, col);
@@ -103,7 +106,6 @@ void statusScreen(const char* line1, const char* line2, uint16_t col) {
     spr.setTextSize(1);
     spr.setTextColor(C_GREY);
     spr.drawString(line2, 120, 140);
-    spr.pushSprite(0, 0);
 }
 
 namespace gfx {

@@ -82,17 +82,16 @@ void smNotifyConfigChanged(const char* id) {
             kScreens[i]->onConfigChanged();
 }
 
-// Название экрана поверх кадра — прямо в tft, ПОСЛЕ pushSprite экрана.
-// Следующий кадр экрана его затрёт — поэтому рисуем каждый tick, пока не
-// истёк OVERLAY_MS (для редко-пушащих экранов оверлей просто остаётся).
+// Название экрана — вкомпоновывается в spr ПЕРЕД pushSprite, поэтому уходит
+// на дисплей одним куском с кадром и не моргает.
 static void drawOverlay(Screen* s) {
-    tft.setFont(&lgfx::fonts::Font0);
-    tft.setTextSize(1);
-    tft.setTextDatum(lgfx::middle_center);
-    int nameW = tft.textWidth(s->title());
-    tft.fillRoundRect(120 - nameW / 2 - 8, 204, nameW + 16, 18, 8, C_DGREY);
-    tft.setTextColor(C_WHITE);
-    tft.drawString(s->title(), 120, 213);
+    spr.setFont(&lgfx::fonts::Font0);
+    spr.setTextSize(1);
+    spr.setTextDatum(lgfx::middle_center);
+    int nameW = spr.textWidth(s->title());
+    spr.fillRoundRect(120 - nameW / 2 - 8, 204, nameW + 16, 18, 8, C_DGREY);
+    spr.setTextColor(C_WHITE);
+    spr.drawString(s->title(), 120, 213);
 }
 
 void smLoop() {
@@ -102,8 +101,10 @@ void smLoop() {
 
     if (lastTickMs == 0 || now - lastTickMs >= s->frameDelayMs()) {
         lastTickMs = now;
-        s->tick(now);
-        if (now - switchMs < OVERLAY_MS) drawOverlay(s);
+        if (s->tick(now)) {   // кадр обновлён — оверлей и единый пуш
+            if (now - switchMs < OVERLAY_MS) drawOverlay(s);
+            spr.pushSprite(0, 0);
+        }
     }
 
     if (hubCfg.rotateSec > 0 && now - switchMs >= hubCfg.rotateSec * 1000UL) smNext();

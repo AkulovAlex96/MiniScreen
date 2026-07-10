@@ -26,6 +26,20 @@ static const uint8_t SKY_R = 8, SKY_G = 16, SKY_B = 36;
 
 static uint32_t lastFetchMs = 0;
 static bool forceRefresh = true;
+static bool needRedraw = true;   // spr перезаписан другим экраном — передекодировать
+
+// Сжатый PNG тайла — собственный постоянный PSRAM-буфер: при возврате на
+// экран внутри POLL_INTERVAL тайл не перекачивается, только декодируется
+static const size_t TILE_BUF_SIZE = 48 * 1024;
+static size_t tileLen = 0;
+static uint8_t* tileBufGet() {
+    static uint8_t* buf = nullptr;
+    if (!buf) {
+        buf = (uint8_t*)ps_malloc(TILE_BUF_SIZE);
+        if (!buf) buf = (uint8_t*)malloc(TILE_BUF_SIZE);
+    }
+    return buf;
+}
 
 // Стандартная slippy-map формула (Web Mercator)
 static void lonLatToTile(double lon, double lat, int zoom, int &x, int &y) {
@@ -45,7 +59,8 @@ static int pngDraw(PNGDRAW *pDraw) {
     return 1;
 }
 
-static bool fetchAndDrawTile() {
+// Скачать свежий тайл в tileBuf (сеть, без отрисовки)
+static bool fetchTile() {
     HTTPClient http;
     http.setTimeout(8000);
     http.begin("https://api.rainviewer.com/public/weather-maps.json");
@@ -79,11 +94,17 @@ static bool fetchAndDrawTile() {
                  String(tx) + "/" + String(ty) + "/" + String(COLOR_SCHEME) + "/" + TILE_OPTIONS + ".png";
     Serial.printf("Tile: %s\n", url.c_str());
 
-    uint8_t* buf = netBufGet();
+    uint8_t* buf = tileBufGet();
     size_t len = 0;
-    if (!buf || !fetchToBuffer(url, buf, NET_BUF_SIZE, len)) return false;
+    if (!buf || !fetchToBuffer(url, buf, TILE_BUF_SIZE, len)) return false;
+    tileLen = len;
+    return true;
+}
 
-    int rc = png.openRAM(buf, len, pngDraw);
+// Декодировать tileBuf в spr + атрибуция (без сети)
+static bool drawTile() {
+    if (tileLen == 0) return false;
+    int rc = png.openRAM(tileBufGet(), tileLen, pngDraw);
     if (rc != PNG_SUCCESS) {
         Serial.printf("PNG open error: %d\n", png.getLastError());
         return false;
@@ -105,8 +126,6 @@ static bool fetchAndDrawTile() {
     spr.setTextSize(1);
     spr.setTextColor(C_GREY, spr.color565(SKY_R, SKY_G, SKY_B));
     spr.drawString("Weather data by RainViewer", 120, 236);   // атрибуция обязательна по ToS
-
-    spr.pushSprite(0, 0);
     return true;
 }
 
@@ -118,23 +137,35 @@ public:
     const char* title() const override { return "Rain radar"; }
 
     void onEnter() override {
-        // spr перезаписан другим экраном — перерисовать тайл (и заодно обновить)
-        rainradar::forceRefresh = true;
+        // spr перезаписан другим экраном — передекодировать сохранённый тайл;
+        // перекачка не нужна, пока не истёк POLL_INTERVAL (таймер общий)
+        rainradar::needRedraw = true;
     }
 
-    void tick(uint32_t nowMs) override {
+    bool tick(uint32_t nowMs) override {
         using namespace rainradar;
-        if (!netUp()) {
-            statusScreen("Rain radar", "no WiFi", C_RED);
-            return;
-        }
 
-        if (forceRefresh || nowMs - lastFetchMs >= POLL_INTERVAL_MS) {
+        if (forceRefresh || tileLen == 0 || nowMs - lastFetchMs >= POLL_INTERVAL_MS) {
+            if (!netUp()) {
+                statusScreen("Rain radar", "no WiFi", C_RED);
+                return true;
+            }
             forceRefresh = false;
             lastFetchMs = nowMs;
-            if (!fetchAndDrawTile()) statusScreen("No data", "retry next cycle", C_RED);
+            if (fetchTile()) {
+                needRedraw = true;
+            } else if (tileLen == 0) {   // старого тайла тоже нет — показать ошибку
+                statusScreen("No data", "retry next cycle", C_RED);
+                return true;
+            }
         }
-        // Между фетчами кадр статичен — ничего не пушим
+
+        if (needRedraw) {
+            needRedraw = false;
+            if (!drawTile()) statusScreen("No data", "png error", C_RED);
+            return true;
+        }
+        return false;   // кадр статичен между фетчами
     }
 
     uint32_t frameDelayMs() const override { return 200; }
@@ -143,7 +174,10 @@ public:
         if (ev == EV_BTN1_SHORT) rainradar::forceRefresh = true;
     }
 
-    void onConfigChanged() override { rainradar::forceRefresh = true; }
+    void onConfigChanged() override {   // сменились координаты — тайл невалиден
+        rainradar::tileLen = 0;
+        rainradar::forceRefresh = true;
+    }
 };
 
 Screen* rainRadarScreen() {

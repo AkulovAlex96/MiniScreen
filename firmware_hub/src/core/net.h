@@ -6,8 +6,9 @@
 // Экраны делают свои HTTP-запросы сами (внутри tick), но через общее:
 //  - secureClient — один WiFiClientSecure на всех (TLS-хендшейку нужно ~50КБ
 //    heap разом, два одновременных не потянем — и не нужно, экран активен один);
-//  - netBuf — общий 48КБ буфер скачивания (PSRAM), см. netBufGet();
-//  - fetchToBuffer — скачать URL в буфер (для PNG-тайлов/карт).
+//  - fetchToBuffer — скачать URL в буфер (для PNG-тайлов/карт). Буфер у
+//    каждого экрана СВОЙ постоянный (PSRAM): сжатый контент переживает уход
+//    с экрана, при возврате — повторный декод вместо перекачки.
 
 bool netConnect();        // блокирующе перебирает сети (статус на экран)
 void netLoop();           // реконнект раз в 30с, если связь упала
@@ -20,9 +21,6 @@ extern WiFiClientSecure secureClient;
 // обход — проверка настоящей цепочки сертификатов).
 extern const char* ROOT_CA_AMAZON;   // api.mapbox.com
 extern const char* ROOT_CA_ISRG;     // api.open-meteo.com
-
-static const size_t NET_BUF_SIZE = 48 * 1024;
-uint8_t* netBufGet();     // общий буфер скачивания (PSRAM, ленивая аллокация)
 
 // Скачать URL в буфер. client==nullptr — обычный http.begin(url)
 // (работает и для https на части хостов — так делали прототипы).

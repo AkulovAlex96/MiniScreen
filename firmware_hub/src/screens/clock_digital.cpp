@@ -10,10 +10,10 @@ public:
     const char* id() const override    { return "clock_digital"; }
     const char* title() const override { return "Digital clock"; }
 
-    void tick(uint32_t) override {
+    bool tick(uint32_t) override {
         if (!timeSynced()) {
             statusScreen("no time", netUp() ? "syncing..." : "no WiFi", C_RED);
-            return;
+            return true;
         }
         DateTime t = timeNow();
         float secFrac = timeSecFrac();
@@ -57,7 +57,7 @@ public:
         snprintf(buf, sizeof(buf), "%s %02d %s %d", WDAYS[t.wday], t.day, MONTHS[t.mon - 1], t.year);
         spr.drawString(buf, 120, 176);
 
-        spr.pushSprite(0, 0);
+        return true;
     }
 };
 

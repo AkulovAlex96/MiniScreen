@@ -23,6 +23,7 @@ bool netConnect() {
     for (int i = 0; i < WIFI_NETS_COUNT; i++) {
         if (!WIFI_NETS[i].ssid || !WIFI_NETS[i].ssid[0]) continue;
         statusScreen("WiFi...", WIFI_NETS[i].ssid, C_CYAN);
+        spr.pushSprite(0, 0);   // мы вне tick() экрана — пушим сами
         WiFi.begin(WIFI_NETS[i].ssid, WIFI_NETS[i].pass);
         uint32_t start = millis();
         while (WiFi.status() != WL_CONNECTED && millis() - start < 8000) delay(200);
@@ -35,6 +36,7 @@ bool netConnect() {
         delay(200);
     }
     statusScreen("WiFi FAIL", "no networks reachable", C_RED);
+    spr.pushSprite(0, 0);
     lastAttemptMs = millis();
     return false;
 }
@@ -45,15 +47,6 @@ void netLoop() {
     if (netUp()) return;
     if (millis() - lastAttemptMs < WIFI_RETRY_MS) return;
     netConnect();
-}
-
-uint8_t* netBufGet() {
-    static uint8_t* buf = nullptr;
-    if (!buf) {
-        buf = (uint8_t*)ps_malloc(NET_BUF_SIZE);   // PSRAM: не съедаем 48КБ heap
-        if (!buf) buf = (uint8_t*)malloc(NET_BUF_SIZE);
-    }
-    return buf;
 }
 
 bool fetchToBuffer(const String& url, uint8_t* buf, size_t bufSize, size_t& outLen,

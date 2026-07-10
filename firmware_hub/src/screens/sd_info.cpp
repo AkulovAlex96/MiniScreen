@@ -91,8 +91,6 @@ static void drawCardInfo() {
 
     spr.setTextColor(C_CYAN, C_BLACK);
     spr.drawString(cardTypeStr(cardType), 120, 195);
-
-    spr.pushSprite(0, 0);
 }
 
 } // namespace sdinfo
@@ -110,15 +108,15 @@ public:
         lastAttemptMs = 0;
     }
 
-    void tick(uint32_t nowMs) override {
+    bool tick(uint32_t nowMs) override {
         using namespace sdinfo;
 
         if (!sdMounted()) {
-            if (lastAttemptMs && nowMs - lastAttemptMs < RETRY_INTERVAL_MS) return;
+            if (lastAttemptMs && nowMs - lastAttemptMs < RETRY_INTERVAL_MS) return false;
             lastAttemptMs = nowMs;
             if (!sdMountIfNeeded()) {
                 statusScreen("NO SD CARD", "insert card...", C_RED);
-                return;
+                return true;
             }
             forceRescan = true;
         }
@@ -126,15 +124,18 @@ public:
         // Пропала карта (вынули на горячую)
         if (SD.cardType() == CARD_NONE) {
             sdUnmount();
-            return;
+            return false;
         }
 
         if (forceRescan) {
             forceRescan = false;
             statusScreen("Scanning", "reading files...", C_CYAN);
+            spr.pushSprite(0, 0);   // впереди блокирующий обход карты — статус сразу
             rescan();
             drawCardInfo();
+            return true;
         }
+        return false;   // кадр статичен до следующего рескана
     }
 
     uint32_t frameDelayMs() const override { return 200; }

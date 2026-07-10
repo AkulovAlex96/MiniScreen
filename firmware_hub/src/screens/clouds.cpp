@@ -133,8 +133,6 @@ static void updateAndDraw(float dtSec) {
     snprintf(buf, sizeof(buf), "cloud %.0f%%", cloudCoverPct);
     spr.setTextDatum(lgfx::bottom_center);
     spr.drawString(buf, 120, 236);
-
-    spr.pushSprite(0, 0);
 }
 
 } // namespace clouds
@@ -152,11 +150,11 @@ public:
         lastFrameMs = 0;
     }
 
-    void tick(uint32_t nowMs) override {
+    bool tick(uint32_t nowMs) override {
         using namespace clouds;
         if (!netUp()) {
             statusScreen("Clouds", "no WiFi", C_RED);
-            return;
+            return true;
         }
 
         if (forceRefresh || nowMs - lastFetchMs >= POLL_INTERVAL_MS) {
@@ -168,6 +166,7 @@ public:
         float dt = (lastFrameMs == 0) ? 0.03f : (nowMs - lastFrameMs) / 1000.0f;
         lastFrameMs = nowMs;
         updateAndDraw(dt);
+        return true;
     }
 
     uint32_t frameDelayMs() const override { return 30; }

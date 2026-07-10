@@ -19,6 +19,10 @@ Screen* cloudsScreen();
 Screen* rainRadarScreen();
 Screen* cityMapScreen();
 Screen* sdInfoScreen();
+Screen* cryptoScreen1();
+Screen* cryptoScreen2();
+Screen* cryptoScreen3();
+Screen* cryptoScreen4();
 
 // extern обязателен: const-массив/const int без него получили бы internal
 // linkage и не слинковались бы с extern-объявлениями в screen_manager.cpp
@@ -32,6 +36,10 @@ extern Screen* const kScreens[] = {
     rainRadarScreen(),
     cityMapScreen(),
     sdInfoScreen(),
+    cryptoScreen1(),
+    cryptoScreen2(),
+    cryptoScreen3(),
+    cryptoScreen4(),
     ringLoaderScreen(),
     progressBarScreen(),
     gaugeScreen(),

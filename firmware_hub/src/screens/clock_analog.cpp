@@ -10,10 +10,10 @@ public:
     const char* id() const override    { return "clock_analog"; }
     const char* title() const override { return "Analog clock"; }
 
-    void tick(uint32_t) override {
+    bool tick(uint32_t) override {
         if (!timeSynced()) {
             statusScreen("no time", netUp() ? "syncing..." : "no WiFi", C_RED);
-            return;
+            return true;
         }
         DateTime t = timeNow();
         float secFrac = timeSecFrac();
@@ -59,7 +59,7 @@ public:
         spr.setTextColor(C_GREY);
         spr.drawString(buf, 120, 162);
 
-        spr.pushSprite(0, 0);
+        return true;
     }
 };
 

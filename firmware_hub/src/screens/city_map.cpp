@@ -22,9 +22,22 @@ namespace citymap {
 static const int      MAP_ZOOM            = 14;   // масштаб (город/квартал)
 static const uint32_t WEATHER_INTERVAL_MS = 5UL * 60UL * 1000UL;
 
-static bool mapLoaded = false;
+static bool mapLoaded = false;   // spr содержит декодированную карту
 static uint32_t lastWeatherMs = 0;
 static bool forceRefresh = true;
+
+// Сжатый PNG карты — собственный постоянный PSRAM-буфер: при возврате на
+// экран карта не перекачивается, только декодируется заново
+static const size_t MAP_BUF_SIZE = 48 * 1024;
+static size_t mapLen = 0;
+static uint8_t* mapBufGet() {
+    static uint8_t* buf = nullptr;
+    if (!buf) {
+        buf = (uint8_t*)ps_malloc(MAP_BUF_SIZE);
+        if (!buf) buf = (uint8_t*)malloc(MAP_BUF_SIZE);
+    }
+    return buf;
+}
 
 static int pngDraw(PNGDRAW *pDraw) {
     static uint16_t line[240];
@@ -33,6 +46,7 @@ static int pngDraw(PNGDRAW *pDraw) {
     return 1;
 }
 
+// Скачать карту в mapBuf (сеть, без отрисовки)
 static bool fetchMap() {
     if (!MAPBOX_TOKEN[0]) return false;
     char url[256];
@@ -44,11 +58,17 @@ static bool fetchMap() {
 
     secureClient.stop();
     secureClient.setCACert(ROOT_CA_AMAZON);
-    uint8_t* buf = netBufGet();
+    uint8_t* buf = mapBufGet();
     size_t len = 0;
-    if (!buf || !fetchToBuffer(url, buf, NET_BUF_SIZE, len, &secureClient)) return false;
+    if (!buf || !fetchToBuffer(url, buf, MAP_BUF_SIZE, len, &secureClient)) return false;
+    mapLen = len;
+    return true;
+}
 
-    int rc = png.openRAM(buf, len, pngDraw);
+// Декодировать mapBuf в spr (без сети)
+static bool decodeMap() {
+    if (mapLen == 0) return false;
+    int rc = png.openRAM(mapBufGet(), mapLen, pngDraw);
     if (rc != PNG_SUCCESS) {
         Serial.printf("PNG open error: %d\n", png.getLastError());
         return false;
@@ -131,39 +151,52 @@ public:
     const char* title() const override { return "City map"; }
 
     void onEnter() override {
-        // spr перезаписан другим экраном — карту надо перекачать/перерисовать
+        // spr перезаписан другим экраном — передекодировать сохранённый PNG;
+        // перекачивать карту не нужно (координаты не менялись)
         citymap::mapLoaded = false;
-        citymap::forceRefresh = true;
     }
 
-    void tick(uint32_t nowMs) override {
+    bool tick(uint32_t nowMs) override {
         using namespace citymap;
         if (!netUp()) {
             statusScreen("City map", "no WiFi", C_RED);
-            return;
+            return true;
         }
 
         bool redraw = false;
 
-        if (!mapLoaded || forceRefresh) {
+        if (mapLen == 0 || forceRefresh) {
             statusScreen("Map...", "loading", C_CYAN);
-            mapLoaded = fetchMap();
+            spr.pushSprite(0, 0);   // впереди блокирующий фетч — статус сразу
+            if (!fetchMap() && mapLen == 0) {
+                forceRefresh = false;
+                statusScreen("Map error", "check MAPBOX_TOKEN", C_RED);
+                return true;
+            }
+            mapLoaded = false;   // буфер обновился — передекодировать
+        }
+
+        if (!mapLoaded) {
+            mapLoaded = decodeMap();
+            if (!mapLoaded) {
+                statusScreen("Map error", "png decode", C_RED);
+                return true;
+            }
             redraw = true;
         }
 
-        if (forceRefresh || nowMs - lastWeatherMs >= WEATHER_INTERVAL_MS) {
+        if (forceRefresh || lastWeatherMs == 0 || nowMs - lastWeatherMs >= WEATHER_INTERVAL_MS) {
             lastWeatherMs = nowMs;
             if (fetchWeather()) redraw = true;
         }
 
         forceRefresh = false;
 
-        if (redraw && mapLoaded) {
+        if (redraw) {
             drawWeatherBanner();
-            spr.pushSprite(0, 0);
-        } else if (!mapLoaded) {
-            statusScreen("Map error", "check MAPBOX_TOKEN", C_RED);
+            return true;
         }
+        return false;   // кадр статичен между обновлениями погоды
     }
 
     uint32_t frameDelayMs() const override { return 200; }
@@ -172,7 +205,8 @@ public:
         if (ev == EV_BTN1_SHORT) citymap::forceRefresh = true;
     }
 
-    void onConfigChanged() override {
+    void onConfigChanged() override {   // сменились координаты — карта невалидна
+        citymap::mapLen = 0;
         citymap::mapLoaded = false;
         citymap::forceRefresh = true;
     }

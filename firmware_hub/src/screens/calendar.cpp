@@ -38,7 +38,7 @@ public:
     const char* id() const override    { return "calendar"; }
     const char* title() const override { return "Calendar"; }
 
-    void tick(uint32_t) override {
+    bool tick(uint32_t) override {
         spr.fillSprite(C_BLACK);
         spr.setFont(&lgfx::fonts::Font0);
         spr.setTextDatum(lgfx::middle_center);
@@ -50,8 +50,7 @@ public:
             spr.setTextSize(1);
             spr.setTextColor(C_GREY);
             spr.drawString(netUp() ? "syncing..." : "no WiFi", 120, 140);
-            spr.pushSprite(0, 0);
-            return;
+            return true;
         }
 
         DateTime t = timeNow();
@@ -102,7 +101,7 @@ public:
         spr.setTextColor(C_ACCENT);
         spr.drawString(buf, 120, 200);
 
-        spr.pushSprite(0, 0);
+        return true;
     }
 };
 

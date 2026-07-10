@@ -220,29 +220,29 @@ public:
         gifReady = false;
     }
 
-    void tick(uint32_t nowMs) override {
+    bool tick(uint32_t nowMs) override {
         using namespace gifplay;
 
         if (!sdMounted() || rescanPending) {
-            if (lastSdAttemptMs && nowMs - lastSdAttemptMs < SD_RETRY_MS) return;
+            if (lastSdAttemptMs && nowMs - lastSdAttemptMs < SD_RETRY_MS) return false;
             lastSdAttemptMs = nowMs;
             if (gifReady) { gif.close(); gifReady = false; }
             if (!sdMountIfNeeded()) {
                 statusScreen("NO SD CARD", "insert card...", C_RED);
-                return;
+                return true;
             }
             scanGifFiles();
             rescanPending = false;
             if (gifFiles.empty()) {
                 statusScreen("NO GIF FILES", "put .gif in /gif", C_RED);
                 rescanPending = true;   // продолжаем пересканировать
-                return;
+                return true;
             }
             if (gifIndex >= gifFiles.size()) gifIndex = 0;
             gifReady = openCurrentGif();
             if (!gifReady) {
                 statusScreen("GIF ERROR", gifFiles[gifIndex].name.c_str(), C_RED);
-                return;
+                return true;
             }
         }
 
@@ -250,19 +250,19 @@ public:
         if (SD.cardType() == CARD_NONE) {
             sdUnmount();
             gifReady = false;
-            return;
+            return false;
         }
 
-        if (!gifReady) return;
-        if (nextFrameDueMs && nowMs < nextFrameDueMs) return;
+        if (!gifReady) return false;
+        if (nextFrameDueMs && nowMs < nextFrameDueMs) return false;
 
         int delayMs = 0;
         if (!gif.playFrame(false, &delayMs)) {
             nextGif();
-            return;
+            return false;
         }
-        spr.pushSprite(0, 0);
         nextFrameDueMs = millis() + max(delayMs, 2);
+        return true;
     }
 
     uint32_t frameDelayMs() const override { return 2; }   // пейсинг — по delay кадра GIF
